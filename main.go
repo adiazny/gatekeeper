@@ -517,14 +517,17 @@ func setupControllers(ctx context.Context, mgr ctrl.Manager, tracker *readiness.
 	}
 
 	syncMetricsCache := syncutil.NewMetricsCache()
-	cm, err := cachemanager.NewCacheManager(&cachemanager.Config{
-		CfClient:         client,
+	cmConfig := &cachemanager.Config{
 		SyncMetricsCache: syncMetricsCache,
 		Tracker:          tracker,
 		ProcessExcluder:  processExcluder,
 		Registrar:        reg,
 		Reader:           mgr.GetCache(),
-	})
+	}
+	if client != nil {
+		cmConfig.CfClient = client
+	}
+	cm, err := cachemanager.NewCacheManager(cmConfig)
 	if err != nil {
 		setupLog.Error(err, "unable to create cache manager")
 		return err

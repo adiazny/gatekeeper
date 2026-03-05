@@ -134,9 +134,9 @@ func TestCacheManager_wipeCacheIfNeeded(t *testing.T) {
 			expectedData: map[fakes.CfDataKey]interface{}{{Gvk: configMapGVK, Key: "default/config-test-1"}: nil},
 		},
 		{
-			name: "handle nil cfClient gracefully",
+			name: "handle noop cfClient gracefully",
 			cm: &CacheManager{
-				cfClient:         nil,
+				cfClient:         &noopCFDataClient{},
 				syncMetricsCache: syncutil.NewMetricsCache(),
 				gvksToDeleteFromCache: func() *watch.Set {
 					gvksToDelete := watch.NewSet()
@@ -144,7 +144,6 @@ func TestCacheManager_wipeCacheIfNeeded(t *testing.T) {
 					return gvksToDelete
 				}(),
 			},
-			expectedData: nil,
 		},
 	}
 
@@ -152,14 +151,8 @@ func TestCacheManager_wipeCacheIfNeeded(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.cm.wipeCacheIfNeeded(context.Background())
 
-			// Only check cfClient contents if it's not nil
-			if tc.cm.cfClient != nil {
-				cfClient, ok := tc.cm.cfClient.(*fakes.FakeCfClient)
-				require.True(t, ok)
+			if cfClient, ok := tc.cm.cfClient.(*fakes.FakeCfClient); ok {
 				require.True(t, cfClient.Contains(tc.expectedData))
-			} else {
-				// For nil cfClient case, just verify expectedData is also nil
-				require.Nil(t, tc.expectedData)
 			}
 		})
 	}
@@ -262,9 +255,9 @@ func TestCacheManager_AddObject(t *testing.T) {
 			expectedMetricStatus: metrics.ErrorStatus,
 		},
 		{
-			name: "AddObject ignores processing if cfClient is nil",
+			name: "AddObject is a no-op with noop cfClient",
 			cm: &CacheManager{
-				cfClient: nil,
+				cfClient: &noopCFDataClient{},
 				watchedSet: func() *watch.Set {
 					ws := watch.NewSet()
 					ws.Add(pod.GroupVersionKind())
@@ -275,8 +268,8 @@ func TestCacheManager_AddObject(t *testing.T) {
 				syncMetricsCache: syncutil.NewMetricsCache(),
 				processExcluder:  process.Get(),
 			},
-			expectedData:     nil,
-			expectSyncMetric: false,
+			expectSyncMetric:     true,
+			expectedMetricStatus: metrics.ActiveStatus,
 		},
 	}
 
@@ -295,12 +288,7 @@ func TestCacheManager_AddObject(t *testing.T) {
 func assertExpecations(t *testing.T, cm *CacheManager, instance *unstructured.Unstructured, expectedData map[fakes.CfDataKey]interface{}, expectSyncMetric bool, expectedMetricStatus *metrics.Status) {
 	t.Helper()
 
-	if cm.cfClient == nil {
-		require.Nil(t, expectedData)
-	} else {
-		cfClient, ok := cm.cfClient.(*fakes.FakeCfClient)
-		require.True(t, ok)
-
+	if cfClient, ok := cm.cfClient.(*fakes.FakeCfClient); ok {
 		require.True(t, cfClient.Contains(expectedData))
 	}
 
@@ -394,9 +382,9 @@ func TestCacheManager_RemoveObject(t *testing.T) {
 			expectSyncMetric: false,
 		},
 		{
-			name: "RemoveObject ignores processing if cfClient is nil",
+			name: "RemoveObject is a no-op with noop cfClient",
 			cm: &CacheManager{
-				cfClient: nil,
+				cfClient: &noopCFDataClient{},
 				watchedSet: func() *watch.Set {
 					ws := watch.NewSet()
 					ws.Add(pod.GroupVersionKind())
@@ -407,7 +395,6 @@ func TestCacheManager_RemoveObject(t *testing.T) {
 				syncMetricsCache: syncutil.NewMetricsCache(),
 				processExcluder:  process.Get(),
 			},
-			expectedData:     nil,
 			expectSyncMetric: false,
 		},
 	}
@@ -835,41 +822,4 @@ func (f *fakeRegistrar) ReplaceWatch(_ context.Context, _ []schema.GroupVersionK
 	}
 
 	return nil
-}
-
-func Test_normalizeCFDataClient(t *testing.T) {
-	tcs := []struct {
-		name      string
-		input     CFDataClient
-		expectNil bool
-	}{
-		{
-			name:      "untyped nil returns nil",
-			input:     nil,
-			expectNil: true,
-		},
-		{
-			name:      "typed nil returns nil",
-			input:     (*fakes.FakeCfClient)(nil),
-			expectNil: true,
-		},
-		{
-			name:      "non-nil client returns non-nil",
-			input:     &fakes.FakeCfClient{},
-			expectNil: false,
-		},
-	}
-
-	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			result := normalizeCFDataClient(tc.input)
-
-			if tc.expectNil {
-				require.Nil(t, result, "expected nil result")
-			} else {
-				require.NotNil(t, result, "expected non-nil result")
-				require.IsType(t, &fakes.FakeCfClient{}, result, "expected FakeCfClient type")
-			}
-		})
-	}
 }

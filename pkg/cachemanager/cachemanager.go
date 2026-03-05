@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"sync"
 	"time"
 
@@ -72,6 +71,18 @@ type CFDataClient interface {
 	RemoveData(ctx context.Context, data interface{}) (*types.Responses, error)
 }
 
+// noopCFDataClient is a no-op implementation of CFDataClient used when no
+// real client is provided.
+type noopCFDataClient struct{}
+
+func (*noopCFDataClient) AddData(_ context.Context, _ interface{}) (*types.Responses, error) {
+	return &types.Responses{}, nil
+}
+
+func (*noopCFDataClient) RemoveData(_ context.Context, _ interface{}) (*types.Responses, error) {
+	return &types.Responses{}, nil
+}
+
 type registrarReplacer interface {
 	ReplaceWatch(ctx context.Context, gvks []schema.GroupVersionKind) error
 }
@@ -94,7 +105,10 @@ func NewCacheManager(config *Config) (*CacheManager, error) {
 		config.GVKAggregator = aggregator.NewGVKAggregator()
 	}
 
-	cfClient := normalizeCFDataClient(config.CfClient)
+	cfClient := config.CfClient
+	if cfClient == nil {
+		cfClient = &noopCFDataClient{}
+	}
 
 	cm := &CacheManager{
 		cfClient:                   cfClient,
@@ -307,7 +321,7 @@ func (c *CacheManager) AddObject(ctx context.Context, instance *unstructured.Uns
 	}
 
 	syncKey := syncutil.GetKeyForSyncMetrics(instance.GetNamespace(), instance.GetName())
-	if c.watchesGVK(gvk) && c.cfClient != nil {
+	if c.watchesGVK(gvk) {
 		_, err = c.cfClient.AddData(ctx, instance)
 		if err != nil {
 			c.syncMetricsCache.AddObject(
@@ -334,10 +348,8 @@ func (c *CacheManager) AddObject(ctx context.Context, instance *unstructured.Uns
 }
 
 func (c *CacheManager) RemoveObject(ctx context.Context, instance *unstructured.Unstructured) error {
-	if c.cfClient != nil {
-		if _, err := c.cfClient.RemoveData(ctx, instance); err != nil {
-			return err
-		}
+	if _, err := c.cfClient.RemoveData(ctx, instance); err != nil {
+		return err
 	}
 	// only delete from metrics map if the data removal was successful
 	c.syncMetricsCache.DeleteObject(syncutil.GetKeyForSyncMetrics(instance.GetNamespace(), instance.GetName()))
@@ -347,10 +359,8 @@ func (c *CacheManager) RemoveObject(ctx context.Context, instance *unstructured.
 }
 
 func (c *CacheManager) wipeData(ctx context.Context) error {
-	if c.cfClient != nil {
-		if _, err := c.cfClient.RemoveData(ctx, target.WipeData()); err != nil {
-			return err
-		}
+	if _, err := c.cfClient.RemoveData(ctx, target.WipeData()); err != nil {
+		return err
 	}
 
 	// reset sync cache before sending the metric
@@ -526,18 +536,4 @@ func (c *CacheManager) wipeCacheIfNeeded(ctx context.Context) {
 		c.excluderChanged = false
 		c.needToList = true
 	}
-}
-
-// normalizeCFDataClient converts typed nil pointers to untyped nil.
-func normalizeCFDataClient(client CFDataClient) CFDataClient {
-	if client == nil {
-		return nil
-	}
-
-	val := reflect.ValueOf(client)
-	if val.Kind() == reflect.Pointer && val.IsNil() {
-		return nil
-	}
-
-	return client
 }
